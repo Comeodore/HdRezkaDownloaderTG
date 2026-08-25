@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: rezka-backend:latest
+    container_name: rezka-backend
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "9970:9970"
+    volumes:
+      - /storage/files/Media:/storage/files/Media
+      - ./data:/app/data
+
+  bot:
+    build:
+      context: .
+      dockerfile: bot/Dockerfile
+    image: rezka-bot:latest
+    container_name: rezka-bot
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - backend

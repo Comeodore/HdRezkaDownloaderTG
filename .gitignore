@@ -1,0 +1,13 @@
+.venv
+venv
+node_modules
+dist
+__pycache__
+*.pyc
+downloads
+data
+.env
+*.log
+.idea
+.DS_Store
+.claude
