@@ -5,6 +5,4 @@ import { initTelegram } from './lib/telegram';
 
 initTelegram();
 
-const app = mount(App, { target: document.getElementById('app')! });
-
-export default app;
+export default mount(App, { target: document.getElementById('app')! });

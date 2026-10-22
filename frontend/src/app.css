@@ -1,23 +1,46 @@
 :root {
-  --bg: #05060b;
-  --text: #ffffff;
-  --text-2: rgba(235, 235, 245, 0.55);
-  --text-3: rgba(235, 235, 245, 0.5);
-  --text-4: rgba(235, 235, 245, 0.4);
+  color-scheme: dark;
 
-  --accent: #0a84ff;
-  --accent-light: #3f9fff;
-  --success: #30d158;
-  --warning: #ff9f0a;
-  --danger: #ff453a;
-  --rating: #ffd60a;
+  /* surfaces — near-black, the posters bring the colour */
+  --bg: #0b0b0e;
+  --surface: #16161b;
+  --surface-2: #1e1e25;
+  --surface-3: #2a2a33;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.13);
 
-  --app-height: 100dvh;
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --text: #f5f5f7;
+  --text-2: rgba(245, 245, 247, 0.66);
+  --text-3: rgba(245, 245, 247, 0.44);
+  --text-4: rgba(245, 245, 247, 0.28);
+
+  /* the primary action is white-on-black, like a cinema marquee */
+  --primary: #f5f5f7;
+  --on-primary: #0b0b0e;
+
+  --success: #34c759;
+  --warning: #ffb340;
+  --danger: #ff5c4d;
+  --rating: #ffcc33;
+  --imdb: #f5c518;
+  --kp: #ff6a00;
+
+  --radius-s: 10px;
+  --radius-m: 14px;
+  --radius-l: 20px;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+
+  /* Telegram injects --tg-*safe-area* vars (Bot API 8+); env() covers browsers */
+  --safe-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-area-inset-bottom, 0px));
+  --tabbar-space: calc(88px + var(--safe-bottom));
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
 }
@@ -25,127 +48,197 @@
 html,
 body {
   margin: 0;
-  padding: 0;
   height: 100%;
+  background: var(--bg);
 }
 
 body {
-  background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   font-size: 15px;
   line-height: 1.4;
-  overscroll-behavior-y: none;
+  overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
-}
-
-#app {
-  min-height: var(--app-height);
+  -webkit-text-size-adjust: 100%;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 button {
-  font-family: inherit;
+  font: inherit;
   color: inherit;
-  border: none;
+  border: 0;
   background: none;
-  cursor: pointer;
-  font-size: inherit;
   padding: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+button:disabled {
+  cursor: default;
 }
 
 input {
-  font-family: inherit;
-  font-size: inherit;
+  font: inherit;
+  color: inherit;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
-input:focus {
+input:focus,
+button:focus {
   outline: none;
 }
 
-input::placeholder {
-  color: var(--text-4);
+button:focus-visible,
+[role='slider']:focus-visible {
+  outline: 2px solid var(--text-2);
+  outline-offset: 2px;
+}
+
+img {
+  display: block;
 }
 
 ::-webkit-scrollbar {
-  width: 0;
-  height: 0;
+  display: none;
 }
 
-/* ── Shared glass recipe ── */
-.glass-card {
-  background: rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(30px) saturate(160%);
-  -webkit-backdrop-filter: blur(30px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 12px 34px rgba(0, 0, 0, 0.4);
+/* ── shared building blocks ── */
+
+.screen {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: calc(18px + var(--safe-top)) 16px var(--tabbar-space);
 }
 
-.primary-fill {
-  background: linear-gradient(180deg, rgba(10, 132, 255, 0.95), rgba(0, 100, 220, 0.9));
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.4),
-    0 14px 34px rgba(10, 132, 255, 0.4);
+.large-title {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 750;
+  letter-spacing: -0.6px;
+  line-height: 1.1;
 }
 
-/* ── Keyframes ── */
-@keyframes drift {
-  0% {
-    transform: translate(0, 0) scale(1);
-  }
-  100% {
-    transform: translate(34px, -26px) scale(1.15);
-  }
+.section-label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--text-3);
+  text-transform: uppercase;
 }
-@keyframes drift2 {
-  0% {
-    transform: translate(0, 0) scale(1);
-  }
-  100% {
-    transform: translate(-40px, 22px) scale(1.1);
-  }
+
+.pressable {
+  transition: transform 0.18s var(--ease-out), opacity 0.18s ease;
 }
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.3;
-  }
+
+.pressable:active:not(:disabled) {
+  transform: scale(0.96);
+  opacity: 0.85;
 }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    transform 0.18s var(--ease-out);
+}
+
+.chip:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.chip.on {
+  color: var(--on-primary);
+  background: var(--primary);
+  border-color: transparent;
+}
+
+.chip:disabled {
+  opacity: 0.4;
+}
+
+.icon-button {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  transition: transform 0.18s var(--ease-out), background 0.2s ease;
+}
+
+.icon-button:active:not(:disabled) {
+  transform: scale(0.9);
+}
+
+.text-button {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-2);
+  padding: 8px 2px;
+}
+
+.text-button:active {
+  opacity: 0.6;
+}
+
+.skeleton {
+  background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%);
+  background-size: 300% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
 @keyframes shimmer {
-  0% {
-    background-position: 200% 0;
+  from {
+    background-position: 100% 0;
   }
-  100% {
-    background-position: -200% 0;
+  to {
+    background-position: 0 0;
   }
 }
-@keyframes panelIn {
+
+@keyframes fade-up {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
-@keyframes cardIn {
-  from {
-    opacity: 0;
-    transform: translateY(14px) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -1,177 +1,162 @@
 <script lang="ts">
   import { api } from '../lib/api';
-  import { episodesWord, formatSize, formatSpeed } from '../lib/format';
-  import { upsertJob } from '../lib/stores';
-  import { haptic } from '../lib/telegram';
-  import type { Job, JobStatus } from '../lib/types';
+  import { episodesWord, formatEta, formatSize, formatSpeed, relativeDay } from '../lib/format';
+  import { app } from '../lib/state.svelte';
+  import { confirm, haptic } from '../lib/telegram';
+  import type { Job } from '../lib/types';
+  import Icon from './Icon.svelte';
   import Poster from './Poster.svelte';
   import Spinner from './Spinner.svelte';
 
   let { job }: { job: Job } = $props();
 
-  interface Vis {
-    word: string;
-    wordColor: string;
-    dot: string;
-    pulse: boolean;
-    showWord: boolean;
-    showBar: boolean;
-    orangeBar: boolean;
-    shimmer: boolean;
-  }
-
-  const VIS: Record<JobStatus, Vis> = {
-    running: { word: '', wordColor: 'var(--accent-light)', dot: 'var(--accent)', pulse: true, showWord: false, showBar: true, orangeBar: false, shimmer: true },
-    queued: { word: 'В очереди', wordColor: 'var(--accent-light)', dot: 'var(--accent)', pulse: false, showWord: true, showBar: true, orangeBar: false, shimmer: false },
-    paused: { word: 'Пауза', wordColor: 'var(--warning)', dot: 'var(--warning)', pulse: false, showWord: true, showBar: true, orangeBar: true, shimmer: false },
-    success: { word: 'Готово', wordColor: 'var(--success)', dot: 'var(--success)', pulse: false, showWord: true, showBar: false, orangeBar: false, shimmer: false },
-    error: { word: 'Ошибка', wordColor: 'var(--text-2)', dot: 'rgba(235,235,245,.4)', pulse: false, showWord: true, showBar: false, orangeBar: false, shimmer: false },
-    partial: { word: 'Частично', wordColor: 'var(--text-2)', dot: 'rgba(235,235,245,.4)', pulse: false, showWord: true, showBar: false, orangeBar: false, shimmer: false },
-    cancelled: { word: 'Отменено', wordColor: 'var(--text-2)', dot: 'rgba(235,235,245,.4)', pulse: false, showWord: true, showBar: false, orangeBar: false, shimmer: false },
-  };
-
   let busy = $state(false);
-  const vis = $derived(VIS[job.status]);
-  const isDownloading = $derived(job.status === 'running');
-  const isQueued = $derived(job.status === 'queued');
-  const isPaused = $derived(job.status === 'paused');
-  const isDone = $derived(job.status === 'success');
-  const canRetry = $derived(job.status === 'error' || job.status === 'partial' || job.status === 'cancelled');
-  const canCancel = $derived(isDownloading || isQueued || isPaused);
 
-  const percent = $derived(
-    isQueued
-      ? 0
-      : job.is_series
-        ? job.total_episodes
-          ? Math.round((job.done_episodes / job.total_episodes) * 100)
-          : 0
-        : Math.round(job.percent),
+  const active = $derived(job.status === 'running' || job.status === 'queued' || job.status === 'paused');
+  const tags = $derived(
+    [job.translator_name, job.quality ?? (job.max_height < 1080 ? `до ${job.max_height}p` : null)]
+      .filter(Boolean)
+      .join(' · '),
   );
 
-  const tail = $derived(`${job.translator_name}${job.quality ? ` · ${job.quality}` : ''}`);
-  const sub = $derived(buildSub(job));
-
-  function progressText(j: Job): string {
-    if (j.is_series) return `${j.done_episodes}/${j.total_episodes || '?'} эпизодов`;
-    if (j.total) return `${formatSize(j.downloaded)} из ${formatSize(j.total)}`;
-    return formatSize(j.downloaded);
-  }
-
-  function buildSub(j: Job): string {
-    switch (j.status) {
-      case 'running':
-        return j.speed > 0 ? `${progressText(j)} · ${formatSpeed(j.speed)}` : progressText(j);
-      case 'paused':
-        return progressText(j);
-      case 'queued':
-        return j.is_series
-          ? j.total_episodes
-            ? episodesWord(j.total_episodes)
-            : ''
-          : j.total
-            ? formatSize(j.total)
-            : '';
-      case 'success':
-        return j.total ? formatSize(j.total) : j.is_series ? episodesWord(j.total_episodes) : '';
-      case 'error':
-        return j.error || 'Ошибка загрузки';
-      default:
-        return progressText(j);
+  const progressLine = $derived.by(() => {
+    if (job.status === 'queued') return 'В очереди';
+    if (job.status === 'paused') return `Пауза · ${Math.floor(job.percent)}%`;
+    const parts: string[] = [];
+    if (job.is_series && job.total_episodes) {
+      parts.push(`${job.current || 'Серия'} · ${Math.min(job.done_episodes + 1, job.total_episodes)} из ${job.total_episodes}`);
+    } else if (job.total) {
+      parts.push(`${formatSize(job.downloaded)} из ${formatSize(job.total)}`);
+    } else {
+      parts.push('Подготовка…');
     }
-  }
+    if (job.speed > 0) parts.push(formatSpeed(job.speed));
+    if (job.eta) parts.push(formatEta(job.eta));
+    return parts.join(' · ');
+  });
 
-  async function run(action: () => Promise<unknown>): Promise<void> {
-    if (busy) return;
+  const resultLine = $derived.by(() => {
+    const when = job.finished_at ? relativeDay(job.finished_at) : '';
+    switch (job.status) {
+      case 'success': {
+        const what = job.is_series ? episodesWord(job.done_episodes) : '';
+        return ['Готово', what, job.bytes_done ? formatSize(job.bytes_done) : '', when].filter(Boolean).join(' · ');
+      }
+      case 'partial':
+        return `Частично: ${job.done_episodes} из ${job.total_episodes} · ${when}`;
+      case 'cancelled':
+        return ['Отменено', when].filter(Boolean).join(' · ');
+      default:
+        return job.error || 'Ошибка загрузки';
+    }
+  });
+
+  async function act(action: () => Promise<unknown>): Promise<boolean> {
+    if (busy) return false;
     busy = true;
-    haptic.impact('medium');
+    haptic.tap();
     try {
       const result = await action();
-      if (result && typeof result === 'object' && 'id' in result) upsertJob(result as Job);
-    } catch {
-      /* ignore — SSE will reconcile */
+      if (result && typeof result === 'object' && 'id' in result) app.upsertJob(result as Job);
+      return true;
+    } catch (error) {
+      app.fail(error);
+      return false;
     } finally {
       busy = false;
     }
   }
+
+  async function cancel(): Promise<void> {
+    const message = job.is_series
+      ? `Остановить загрузку «${job.name}»? Уже скачанные серии останутся.`
+      : `Отменить загрузку «${job.name}»? Скачанная часть будет удалена.`;
+    if (await confirm(message)) act(() => api.cancel(job.id));
+  }
+
+  async function remove(): Promise<void> {
+    if (await act(() => api.remove(job.id))) app.jobs = app.jobs.filter((item) => item.id !== job.id);
+  }
+
+  function open(): void {
+    app.openTitle({ url: job.url, title: job.name, kind: job.kind, year: job.year, poster: job.poster });
+  }
 </script>
 
-<div class="card">
-  <div class="thumb"><Poster src={job.poster} alt={job.name} kind={job.kind} /></div>
-
-  <div class="content">
-    <div class="name">{job.name}</div>
-    <div class="status">
-      <span class="dot" class:pulse={vis.pulse} style="background:{vis.dot};box-shadow:0 0 8px {vis.dot}"></span>
-      {#if vis.showWord}
-        <span class="word" style="color:{vis.wordColor}">{vis.word}</span>
-        <span class="sep">·</span>
-      {/if}
-      <span class="tail">{tail}</span>
-    </div>
-
-    {#if vis.showBar}
-      <div class="track">
-        <div class="fill" class:orange={vis.orangeBar} class:shimmer={vis.shimmer} style="width:{percent}%"></div>
+{#if active}
+  <article class="card">
+    <button class="thumb" onclick={open} aria-label="Открыть «{job.name}»">
+      <Poster src={job.poster} alt="" kind={job.kind} />
+    </button>
+    <div class="content">
+      <div class="name">{job.name}</div>
+      {#if tags}<div class="tags">{tags}</div>{/if}
+      <div class="bar" class:paused={job.status === 'paused'} class:queued={job.status === 'queued'}>
+        <div class="fill" style:width="{job.status === 'queued' ? 0 : job.percent}%"></div>
       </div>
-    {/if}
-
-    {#if sub}<div class="sub" class:err={job.status === 'error'}>{sub}</div>{/if}
-  </div>
-
-  <div class="actions">
+      <div class="line">{progressLine}</div>
+    </div>
+    <div class="actions">
+      {#if busy}
+        <Spinner size={18} />
+      {:else}
+        {#if job.status === 'paused'}
+          <button class="icon-button primary" onclick={() => act(() => api.resume(job.id))} aria-label="Продолжить">
+            <Icon name="play" size={15} />
+          </button>
+        {:else}
+          <button class="icon-button" onclick={() => act(() => api.pause(job.id))} aria-label="Пауза">
+            <Icon name="pause" size={14} />
+          </button>
+        {/if}
+        <button class="icon-button ghost" onclick={cancel} aria-label="Отменить">
+          <Icon name="close" size={14} stroke={2.4} />
+        </button>
+      {/if}
+    </div>
+  </article>
+{:else}
+  <article class="row">
+    <button class="row-main" onclick={open}>
+      <span class="mini"><Poster src={job.poster} alt="" kind={job.kind} /></span>
+      <span class="row-text">
+        <span class="name">{job.name}</span>
+        <span class="result {job.status}">{resultLine}</span>
+      </span>
+    </button>
     {#if busy}
-      <Spinner size={18} />
+      <Spinner size={16} />
     {:else}
-      {#if isDownloading}
-        <button class="btn primary" onclick={() => run(() => api.pauseDownload(job.id))} aria-label="Пауза">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="5" width="4" height="14" rx="1.4" /><rect x="14" y="5" width="4" height="14" rx="1.4" /></svg>
-        </button>
-      {:else if isPaused}
-        <button class="btn primary" onclick={() => run(() => api.resumeDownload(job.id))} aria-label="Продолжить">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.5v13c0 .8.9 1.3 1.6.9l10-6.5c.6-.4.6-1.4 0-1.8l-10-6.5c-.7-.4-1.6.1-1.6.9z" /></svg>
+      {#if job.status !== 'success'}
+        <button class="icon-button ghost" onclick={() => act(() => api.retry(job.id))} aria-label="Повторить">
+          <Icon name="retry" size={16} />
         </button>
       {/if}
-      {#if canCancel}
-        <button class="btn subtle" onclick={() => run(() => api.cancelDownload(job.id))} aria-label="Отменить">✕</button>
-      {/if}
-      {#if canRetry}
-        <button class="btn primary" onclick={() => run(() => api.retryDownload(job.id))} aria-label="Повторить">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.4-5.7" /><path d="M20 4v4.5h-4.5" /></svg>
-        </button>
-      {/if}
-      {#if isDone}
-        <span class="done-badge">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#30D158" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
-        </span>
-      {/if}
+      <button class="icon-button ghost" onclick={remove} aria-label="Убрать из списка">
+        <Icon name="trash" size={16} />
+      </button>
     {/if}
-  </div>
-</div>
+  </article>
+{/if}
 
 <style>
   .card {
     display: flex;
-    gap: 12px;
     align-items: center;
+    gap: 12px;
     padding: 12px;
-    border-radius: 22px;
-    background: rgba(255, 255, 255, 0.06);
-    backdrop-filter: blur(30px) saturate(160%);
-    -webkit-backdrop-filter: blur(30px) saturate(160%);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      0 12px 34px rgba(0, 0, 0, 0.4);
-    animation: cardIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+    border-radius: var(--radius-l);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    animation: fade-up 0.35s var(--ease-out);
   }
   .thumb {
+    flex: none;
     width: 52px;
     height: 78px;
-    border-radius: 12px;
-    flex: none;
+    border-radius: 10px;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--line);
   }
   .content {
     flex: 1;
@@ -179,44 +164,21 @@
   }
   .name {
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 650;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .status {
-    margin-top: 4px;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    color: var(--text-2);
+  .tags {
+    margin-top: 2px;
+    font-size: 12.5px;
+    color: var(--text-3);
     white-space: nowrap;
-    overflow: hidden;
-  }
-  .dot {
-    flex: none;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    transition: background 0.4s;
-  }
-  .dot.pulse {
-    animation: pulse 1.6s ease-in-out infinite;
-  }
-  .word {
-    font-weight: 500;
-    transition: color 0.4s;
-  }
-  .sep {
-    color: rgba(235, 235, 245, 0.35);
-  }
-  .tail {
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .track {
-    margin-top: 9px;
+  .bar {
+    margin-top: 10px;
     height: 5px;
     border-radius: 3px;
     background: rgba(255, 255, 255, 0.1);
@@ -225,71 +187,93 @@
   .fill {
     height: 100%;
     border-radius: 3px;
-    background: linear-gradient(90deg, #0a84ff, #5ac8fa, #0a84ff);
-    background-size: 200% 100%;
-    box-shadow: 0 0 10px rgba(10, 132, 255, 0.7);
-    transition: width 0.38s linear;
+    background: var(--text);
+    transition: width 0.8s linear;
   }
-  .fill.shimmer {
-    animation: shimmer 2.2s linear infinite;
+  .bar.paused .fill {
+    background: var(--warning);
   }
-  .fill.orange {
-    background: rgba(255, 159, 10, 0.75);
-    box-shadow: none;
+  .bar.queued {
+    background: repeating-linear-gradient(-45deg, rgba(255, 255, 255, 0.08) 0 6px, rgba(255, 255, 255, 0.03) 6px 12px);
   }
-  .sub {
-    margin-top: 6px;
-    font-size: 11.5px;
-    color: var(--text-3);
+  .line {
+    margin-top: 7px;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-2);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .sub.err {
-    color: var(--danger);
-    white-space: normal;
-  }
   .actions {
-    display: flex;
-    align-items: center;
-    gap: 7px;
     flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
   }
-  .btn {
-    width: 38px;
-    height: 38px;
-    border-radius: 50%;
+  .icon-button {
+    width: 36px;
+    height: 36px;
+  }
+  .icon-button.primary {
+    color: var(--on-primary);
+    background: var(--primary);
+    border-color: transparent;
+  }
+  .icon-button.ghost {
+    color: var(--text-2);
+    background: transparent;
+    border-color: transparent;
+  }
+
+  .row {
     display: flex;
     align-items: center;
-    justify-content: center;
-    transition: transform 0.15s ease;
+    gap: 4px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
   }
-  .btn:active {
-    transform: scale(0.88);
-  }
-  .btn.primary {
-    background: linear-gradient(180deg, rgba(10, 132, 255, 0.9), rgba(0, 100, 220, 0.8));
-    border: 1px solid rgba(255, 255, 255, 0.28);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.35),
-      0 6px 16px rgba(10, 132, 255, 0.35);
-  }
-  .btn.subtle {
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
-    color: rgba(235, 235, 245, 0.7);
-    font-size: 14px;
-  }
-  .done-badge {
-    width: 38px;
-    height: 38px;
-    border-radius: 50%;
+  .row-main {
+    flex: 1;
+    min-width: 0;
     display: flex;
     align-items: center;
-    justify-content: center;
-    background: rgba(48, 209, 88, 0.14);
-    border: 1px solid rgba(48, 209, 88, 0.3);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    gap: 12px;
+    text-align: left;
+  }
+  .row-main:active {
+    opacity: 0.6;
+  }
+  .mini {
+    flex: none;
+    width: 36px;
+    height: 54px;
+    border-radius: 7px;
+    overflow: hidden;
+  }
+  .row-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .result {
+    margin-top: 2px;
+    font-size: 12.5px;
+    color: var(--text-3);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .result.success {
+    color: var(--success);
+  }
+  .result.partial {
+    color: var(--warning);
+  }
+  .result.error {
+    color: var(--danger);
   }
 </style>

@@ -1,108 +1,110 @@
 <script lang="ts">
   import DownloadCard from '../components/DownloadCard.svelte';
+  import Icon from '../components/Icon.svelte';
   import { api } from '../lib/api';
-  import { jobs } from '../lib/stores';
-  import { haptic } from '../lib/telegram';
+  import { app } from '../lib/state.svelte';
+  import { confirm, haptic } from '../lib/telegram';
 
-  const FINISHED = new Set(['success', 'error', 'cancelled', 'partial']);
-  const hasFinished = $derived($jobs.some((job) => FINISHED.has(job.status)));
-  let clearing = $state(false);
+  const ACTIVE = new Set(['running', 'queued', 'paused']);
+  const ORDER: Record<string, number> = { running: 0, queued: 1, paused: 2 };
 
-  async function clearHistory(): Promise<void> {
-    if (clearing) return;
-    clearing = true;
-    haptic.impact('light');
+  const active = $derived(
+    app.jobs.filter((job) => ACTIVE.has(job.status)).sort((a, b) => ORDER[a.status] - ORDER[b.status]),
+  );
+  const finished = $derived(
+    app.jobs
+      .filter((job) => !ACTIVE.has(job.status))
+      .sort((a, b) => (b.finished_at ?? b.created_at) - (a.finished_at ?? a.created_at)),
+  );
+
+  async function clear(): Promise<void> {
+    if (!(await confirm('Очистить историю загрузок? Файлы в медиатеке останутся.'))) return;
+    haptic.tap();
     try {
-      jobs.set(await api.clearDownloads());
-    } catch {
-      /* ignore */
-    } finally {
-      clearing = false;
+      app.setJobs(await api.clearFinished());
+    } catch (error) {
+      app.fail(error);
     }
   }
 </script>
 
-<div class="head">
-  <h1>Загрузки</h1>
-  {#if hasFinished}
-    <button class="clear" onclick={clearHistory} disabled={clearing}>Очистить</button>
+<div class="screen">
+  <h1 class="large-title">Загрузки</h1>
+
+  {#if !app.jobs.length}
+    <div class="empty">
+      <div class="empty-icon"><Icon name="download" size={30} stroke={1.6} /></div>
+      <h2>Пока ничего не качается</h2>
+      <p>Найдите фильм или сериал и нажмите «Скачать» — прогресс появится здесь, а по завершении придёт сообщение в&nbsp;Telegram</p>
+      <button class="chip on" onclick={() => app.selectTab('search')}>
+        <Icon name="search" size={15} /> К поиску
+      </button>
+    </div>
+  {:else}
+    {#if active.length}
+      <div class="section-label head">Сейчас</div>
+      <div class="cards">
+        {#each active as job (job.id)}
+          <DownloadCard {job} />
+        {/each}
+      </div>
+    {/if}
+
+    {#if finished.length}
+      <div class="head row">
+        <span class="section-label">История</span>
+        <button class="text-button" onclick={clear}>Очистить</button>
+      </div>
+      <div>
+        {#each finished as job (job.id)}
+          <DownloadCard {job} />
+        {/each}
+      </div>
+    {/if}
   {/if}
 </div>
 
-{#if $jobs.length}
-  <div class="list">
-    {#each $jobs as job (job.id)}
-      <DownloadCard {job} />
-    {/each}
-  </div>
-{:else}
-  <div class="empty">
-    <div class="empty-icon">
-      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="rgba(235,235,245,.8)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11" /><path d="M7 11l5 5 5-5" /><path d="M4.5 20h15" /></svg>
-    </div>
-    <div class="empty-title">Пока пусто</div>
-    <div class="empty-hint">Найдите фильм во вкладке Поиск и нажмите «Скачать»</div>
-  </div>
-{/if}
-
 <style>
   .head {
+    margin: 24px 0 10px;
+  }
+  .head.row {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
+    margin-bottom: 2px;
   }
-  h1 {
-    font-size: 34px;
-    font-weight: 700;
-    letter-spacing: -0.5px;
-    line-height: 1.1;
-    margin: 0;
-  }
-  .clear {
-    font-size: 15px;
-    font-weight: 500;
-    color: var(--accent);
-    transition: opacity 0.15s ease;
-  }
-  .clear:active,
-  .clear:disabled {
-    opacity: 0.5;
-  }
-  .list {
-    margin-top: 18px;
+  .cards {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
   }
   .empty {
-    margin-top: 150px;
+    margin-top: 16vh;
     display: flex;
     flex-direction: column;
     align-items: center;
     text-align: center;
-    padding: 0 30px;
+    padding: 0 20px;
   }
   .empty-icon {
-    width: 84px;
-    height: 84px;
-    border-radius: 28px;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.16),
-      0 16px 40px rgba(0, 0, 0, 0.45);
+    padding: 20px;
+    border-radius: 26px;
+    color: var(--text-2);
+    background: var(--surface);
+    border: 1px solid var(--line);
   }
-  .empty-title {
-    margin-top: 20px;
-    font-size: 20px;
+  h2 {
+    margin: 18px 0 0;
+    font-size: 19px;
     font-weight: 700;
   }
-  .empty-hint {
-    margin-top: 7px;
-    font-size: 14px;
-    color: var(--text-2);
+  p {
+    margin: 8px 0 20px;
+    max-width: 300px;
+    font-size: 14.5px;
+    line-height: 1.45;
+    color: var(--text-3);
   }
 </style>

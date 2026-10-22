@@ -1,7 +1,6 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-aiohttp>=3.9
-pydantic>=2.7
-pydantic-settings>=2.3
-HdRezkaApi==11.2.3
-requests>=2.31
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+aiohttp==3.14.3
+pydantic==2.13.4
+pydantic-settings==2.15.0
+beautifulsoup4==4.15.0

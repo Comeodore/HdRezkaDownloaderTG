@@ -12,6 +12,12 @@ services:
     volumes:
       - /storage/files/Media:/storage/files/Media
       - ./data:/app/data
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
 
   bot:
     build:
@@ -22,4 +28,10 @@ services:
     restart: unless-stopped
     env_file: .env
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"

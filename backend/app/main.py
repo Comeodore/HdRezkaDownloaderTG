@@ -4,16 +4,20 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import Settings, get_settings
-from .download.manager import DownloadManager
+from .download.engine import JobFailed
+from .download.manager import DownloadConflict, DownloadManager
 from .heartbeat import heartbeat_task
+from .library.service import LibraryEnricher, LibraryMeta
 from .logging_conf import configure_logging, get_logger
-from .rezka.session import RezkaGateway
+from .notify import Notifier
+from .rezka.client import RezkaClient, RezkaError
 from .routers import downloads, library, media, preview, search
+from .streams import StreamResolver
 
 logger = get_logger("app")
 
@@ -22,9 +26,18 @@ logger = get_logger("app")
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(logging.INFO)
-    app.state.settings = settings
-    app.state.gateway = RezkaGateway(settings)
-    app.state.manager = DownloadManager(settings, app.state.gateway)
+    if settings.dev_fake_user_id:
+        logger.warning("DEV_FAKE_USER_ID=%s — requests without Telegram auth are accepted!", settings.dev_fake_user_id)
+
+    client = RezkaClient(settings)
+    resolver = StreamResolver(settings, client)
+    meta = LibraryMeta(settings)
+    manager = DownloadManager(settings, client, meta, Notifier(settings))
+    await client.start()
+    await resolver.start()
+    await manager.start()
+    app.state.client, app.state.resolver, app.state.meta, app.state.manager = client, resolver, meta, manager
+    app.state.enricher = LibraryEnricher(meta, client)
 
     heartbeat = None
     if os.environ.get("HEARTBEAT_URL"):
@@ -36,18 +49,34 @@ async def lifespan(app: FastAPI):
     finally:
         if heartbeat:
             heartbeat.cancel()
-        await app.state.manager.close()
-        await preview.close_http()
+        await manager.close()
+        await resolver.close()
+        await client.close()
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="Rezka Mini App", version="1.0.0", lifespan=lifespan)
-    app.include_router(search.router)
-    app.include_router(downloads.router)
-    app.include_router(library.router)
-    app.include_router(media.router)
-    app.include_router(preview.router)
+    app = FastAPI(title="Rezka Mini App", version="2.0.0", lifespan=lifespan, docs_url=None, redoc_url=None)
+
+    @app.exception_handler(RezkaError)
+    async def rezka_error(_request: Request, exc: RezkaError) -> JSONResponse:
+        return JSONResponse({"detail": exc.message}, status_code=exc.status_code)
+
+    @app.exception_handler(JobFailed)
+    async def job_failed(_request: Request, exc: JobFailed) -> JSONResponse:
+        return JSONResponse({"detail": exc.message}, status_code=400)
+
+    @app.exception_handler(DownloadConflict)
+    async def conflict(_request: Request, exc: DownloadConflict) -> JSONResponse:
+        return JSONResponse({"detail": exc.message, "job_id": exc.job.id}, status_code=409)
+
+    @app.get("/api/health", include_in_schema=False)
+    async def health(request: Request) -> dict:
+        state = request.app.state
+        return {"ok": True, "rezka_session": state.client.logged_in, "active_downloads": state.manager.active_count()}
+
+    for module in (search, downloads, library, media, preview):
+        app.include_router(module.router)
     _mount_frontend(app, settings)
     return app
 
@@ -62,26 +91,26 @@ class HashedStaticFiles(StaticFiles):
 
 
 def _mount_frontend(app: FastAPI, settings: Settings) -> None:
-    static_dir = Path(settings.frontend_dir)
-    if not static_dir.is_dir():
+    static_dir = Path(settings.frontend_dir).resolve()
+    index_file = static_dir / "index.html"
+    if not index_file.is_file():
         logger.warning("Frontend dir %s not found — serving API only", static_dir)
         return
 
-    assets_dir = static_dir / "assets"
-    if assets_dir.is_dir():
-        app.mount("/assets", HashedStaticFiles(directory=assets_dir), name="assets")
+    if (static_dir / "assets").is_dir():
+        app.mount("/assets", HashedStaticFiles(directory=static_dir / "assets"), name="assets")
 
-    index_file = static_dir / "index.html"
-    # no-cache = revalidate with the origin on every load, so Cloudflare and the
-    # Telegram WebView pick up a new index.html right after a deploy.
+    # no-cache = revalidate on every load, so Cloudflare and the Telegram
+    # WebView pick up a new index.html right after a deploy.
     revalidate = {"Cache-Control": "no-cache"}
 
-    @app.get("/{full_path:path}")
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     async def spa(full_path: str) -> FileResponse:
         if full_path.startswith("api/"):
             raise HTTPException(404, "Not found")
-        candidate = static_dir / full_path
-        if full_path and candidate.is_file():
+        candidate = (static_dir / full_path).resolve()
+        # resolve() + is_relative_to() blocks `..%2F` traversal out of the static dir
+        if full_path and candidate.is_relative_to(static_dir) and candidate.is_file():
             return FileResponse(candidate, headers=revalidate)
         return FileResponse(index_file, headers=revalidate)
 

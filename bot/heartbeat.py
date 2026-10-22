@@ -73,7 +73,7 @@ async def heartbeat_task(period: int = 45, *, service_id: str | None = None,
     if the loop itself hangs, the beat stops and the monitor flags it.
     """
     import asyncio
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     while True:
         await loop.run_in_executor(
             None, lambda: beat("alive", service_id=service_id, base=base, token=token)

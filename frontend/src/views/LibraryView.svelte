@@ -1,151 +1,328 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import LibraryCard from '../components/LibraryCard.svelte';
+  import Icon from '../components/Icon.svelte';
+  import Poster from '../components/Poster.svelte';
+  import Spinner from '../components/Spinner.svelte';
   import { api } from '../lib/api';
-  import { formatSize, titlesWord } from '../lib/format';
-  import { library } from '../lib/stores';
-  import { haptic } from '../lib/telegram';
+  import { episodesWord, formatSize, seasonsWord, titlesWord } from '../lib/format';
+  import { app, library } from '../lib/state.svelte';
+  import { confirm, haptic } from '../lib/telegram';
+  import type { LibraryItem } from '../lib/types';
 
-  let loaded = $state(false);
-  let error = $state('');
-  let refreshing = $state(false);
-  let leaving = $state<Set<string>>(new Set());
+  type Filter = 'all' | 'movie' | 'series';
 
-  const totalSize = $derived($library.reduce((sum, item) => sum + item.size, 0));
-  const summary = $derived(`${titlesWord($library.length)} · ${formatSize(totalSize)}`);
+  let filter = $state<Filter>('all');
+  let removing = $state<Set<string>>(new Set());
 
-  onMount(load);
+  const counts = $derived({
+    all: library.items.length,
+    movie: library.items.filter((item) => item.kind === 'movie').length,
+    series: library.items.filter((item) => item.kind === 'series').length,
+  });
+  const visible = $derived(filter === 'all' ? library.items : library.items.filter((item) => item.kind === filter));
+  const usedShare = $derived(library.disk?.total ? (library.disk.used / library.disk.total) * 100 : 0);
+  const totalSize = $derived(visible.reduce((sum, item) => sum + item.size, 0));
 
-  async function load(): Promise<void> {
-    error = '';
-    try {
-      library.set(await api.library());
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      loaded = true;
+  onMount(() => {
+    library.load();
+  });
+
+  function refresh(): void {
+    haptic.tap();
+    library.load();
+  }
+
+  function setFilter(value: Filter): void {
+    if (value === filter) return;
+    haptic.select();
+    filter = value;
+  }
+
+  function describe(item: LibraryItem): string {
+    if (item.kind === 'series') {
+      return [
+        'Сериал',
+        item.seasons && item.seasons > 1 ? seasonsWord(item.seasons) : null,
+        item.episodes ? episodesWord(item.episodes) : null,
+        formatSize(item.size),
+      ]
+        .filter(Boolean)
+        .join(' · ');
     }
+    return `Фильм · ${formatSize(item.size)}`;
   }
 
-  async function refresh(): Promise<void> {
-    if (refreshing) return;
-    refreshing = true;
-    haptic.impact('light');
-    try {
-      const [items] = await Promise.all([api.library(), delay(1000)]);
-      library.set(items);
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      refreshing = false;
-    }
-  }
-
-  function delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  async function remove(id: string): Promise<void> {
-    if (leaving.has(id)) return;
-    haptic.impact('medium');
-    leaving = new Set(leaving).add(id);
-    try {
-      await api.deleteLibrary(id);
-    } catch {
-      const next = new Set(leaving);
-      next.delete(id);
-      leaving = next;
+  function open(item: LibraryItem): void {
+    if (!item.url) {
+      haptic.warning();
+      app.notify('Этот файл добавлен не через приложение — ссылки на HDRezka нет');
       return;
     }
-    setTimeout(() => {
-      library.update((list) => list.filter((entry) => entry.id !== id));
-      const next = new Set(leaving);
-      next.delete(id);
-      leaving = next;
-    }, 330);
+    app.openTitle({ url: item.url, title: item.title ?? item.name, kind: item.kind, year: item.year, poster: item.poster });
+  }
+
+  async function remove(item: LibraryItem): Promise<void> {
+    const what = item.kind === 'series' ? `сериал «${item.name}» целиком` : `«${item.name}»`;
+    if (!(await confirm(`Удалить ${what} с диска? Освободится ${formatSize(item.size)}.`))) return;
+    haptic.press();
+    removing = new Set(removing).add(item.id);
+    try {
+      await api.deleteLibrary(item.id);
+      library.items = library.items.filter((entry) => entry.id !== item.id);
+      if (library.disk) {
+        library.disk = { ...library.disk, used: library.disk.used - item.size, free: library.disk.free + item.size };
+      }
+      app.notify('Удалено', 'success');
+    } catch (error) {
+      app.fail(error);
+    } finally {
+      const next = new Set(removing);
+      next.delete(item.id);
+      removing = next;
+    }
   }
 </script>
 
-<div class="head">
-  <h1>Медиатека</h1>
-  <button class="refresh" onclick={refresh} aria-label="Обновить">
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="rgba(235,235,245,.85)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class:spin={refreshing}><path d="M20 12a8 8 0 1 1-2.4-5.7" /><path d="M20 4v4.5h-4.5" /></svg>
-  </button>
+<div class="screen">
+  <div class="title-row">
+    <h1 class="large-title">Медиатека</h1>
+    <button class="icon-button" onclick={refresh} aria-label="Обновить" disabled={library.loading}>
+      <span class:spinning={library.loading} class="glyph"><Icon name="refresh" size={18} /></span>
+    </button>
+  </div>
+
+  {#if library.disk && library.disk.total}
+    <div class="disk">
+      <div class="disk-top">
+        <span class="disk-free">{formatSize(library.disk.free)}</span>
+        <span class="disk-of">свободно из {formatSize(library.disk.total)}</span>
+      </div>
+      <div class="disk-bar"><div class="disk-fill" style:width="{usedShare}%"></div></div>
+    </div>
+  {/if}
+
+  {#if !library.loaded}
+    <div class="center"><Spinner /></div>
+  {:else if library.error && !library.items.length}
+    <div class="message">
+      <p>{library.error}</p>
+      <button class="chip" onclick={refresh}><Icon name="retry" size={15} /> Повторить</button>
+    </div>
+  {:else if !library.items.length}
+    <div class="message">
+      <p>Медиатека пуста — скачанное появится здесь</p>
+    </div>
+  {:else}
+    <div class="filters" role="tablist">
+      {#each [['all', 'Все'], ['movie', 'Фильмы'], ['series', 'Сериалы']] as [value, label] (value)}
+        <button
+          class="chip"
+          class:on={filter === value}
+          role="tab"
+          aria-selected={filter === value}
+          onclick={() => setFilter(value as Filter)}
+        >
+          {label}<span class="count">{counts[value as Filter]}</span>
+        </button>
+      {/each}
+    </div>
+    <div class="summary">{titlesWord(visible.length)} · {formatSize(totalSize)}</div>
+
+    <ul class="list">
+      {#each visible as item (item.id)}
+        <li class:leaving={removing.has(item.id)}>
+          <button class="main" onclick={() => open(item)}>
+            <span class="cover"><Poster src={item.poster} alt="" kind={item.kind} /></span>
+            <span class="text">
+              <span class="name">{item.name}</span>
+              <span class="sub">{describe(item)}</span>
+              {#if item.downloading}<span class="live"><span class="dot"></span>Качается</span>{/if}
+            </span>
+          </button>
+          <button
+            class="icon-button ghost"
+            onclick={() => remove(item)}
+            disabled={item.downloading || removing.has(item.id)}
+            aria-label="Удалить «{item.name}»"
+          >
+            {#if removing.has(item.id)}<Spinner size={16} />{:else}<Icon name="trash" size={17} />{/if}
+          </button>
+        </li>
+      {/each}
+    </ul>
+    <p class="footnote">Файлы лежат в общей папке сервера — их видно по SMB с телевизора и компьютера</p>
+  {/if}
 </div>
 
-{#if error && !$library.length}
-  <div class="state">{error}</div>
-{:else if loaded && !$library.length}
-  <div class="state">Медиатека пуста. Скачанное появится здесь.</div>
-{:else if $library.length}
-  <div class="summary">{summary}</div>
-  <div class="list">
-    {#each $library as item (item.id)}
-      <div class="row-wrap" class:leaving={leaving.has(item.id)}>
-        <LibraryCard {item} ondelete={remove} />
-      </div>
-    {/each}
-  </div>
-{/if}
-
 <style>
-  .head {
+  .title-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
   }
-  h1 {
-    font-size: 34px;
-    font-weight: 700;
-    letter-spacing: -0.5px;
-    line-height: 1.1;
-    margin: 0;
-  }
-  .refresh {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
+  .glyph {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.07);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
-    transition: transform 0.15s ease;
   }
-  .refresh:active {
-    transform: scale(0.88);
+  .spinning {
+    animation: spin 0.9s linear infinite;
   }
-  .spin {
-    animation: spin 0.9s cubic-bezier(0.4, 0.2, 0.2, 1) infinite;
+
+  .disk {
+    margin-top: 16px;
+    padding: 14px 16px 16px;
+    border-radius: var(--radius-l);
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+  .disk-top {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .disk-free {
+    font-size: 22px;
+    font-weight: 750;
+    letter-spacing: -0.3px;
+  }
+  .disk-of {
+    font-size: 13px;
+    color: var(--text-3);
+  }
+  .disk-bar {
+    margin-top: 12px;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+  }
+  .disk-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--text-2), var(--text));
+  }
+
+  .filters {
+    margin-top: 18px;
+    display: flex;
+    gap: 8px;
+  }
+  .count {
+    margin-left: 2px;
+    opacity: 0.55;
+    font-variant-numeric: tabular-nums;
   }
   .summary {
-    margin-top: 6px;
+    margin-top: 14px;
     font-size: 13px;
     color: var(--text-3);
   }
   .list {
-    margin-top: 6px;
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+  }
+  li {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    transition: opacity 0.25s ease;
+  }
+  li.leaving {
+    opacity: 0.4;
+  }
+  .main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+  }
+  .main:active {
+    opacity: 0.6;
+  }
+  .cover {
+    flex: none;
+    width: 44px;
+    height: 66px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .text {
+    min-width: 0;
     display: flex;
     flex-direction: column;
+    gap: 2px;
   }
-  .row-wrap {
+  .name {
+    font-size: 15.5px;
+    font-weight: 600;
+    white-space: nowrap;
     overflow: hidden;
-    max-height: 80px;
-    opacity: 1;
-    transition:
-      max-height 0.32s cubic-bezier(0.4, 0, 0.2, 1),
-      opacity 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+    text-overflow: ellipsis;
   }
-  .row-wrap.leaving {
-    max-height: 0;
-    opacity: 0;
+  .sub {
+    font-size: 13px;
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .state {
-    margin-top: 60px;
+  .live {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-2);
+  }
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--success);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    50% {
+      opacity: 0.3;
+    }
+  }
+  .icon-button.ghost {
+    flex: none;
+    color: var(--text-3);
+    background: transparent;
+    border-color: transparent;
+  }
+  .icon-button.ghost:disabled {
+    opacity: 0.35;
+  }
+  .center {
+    margin-top: 20vh;
+    display: flex;
+    justify-content: center;
+  }
+  .message {
+    margin-top: 16vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
     text-align: center;
     color: var(--text-2);
-    font-size: 15px;
-    padding: 0 30px;
+  }
+  .message p {
+    margin: 0;
+    max-width: 280px;
+  }
+  .footnote {
+    margin: 18px 4px 0;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--text-4);
+    text-align: center;
   }
 </style>

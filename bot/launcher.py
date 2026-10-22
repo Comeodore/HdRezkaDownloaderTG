@@ -4,62 +4,57 @@ import os
 
 from dotenv import load_dotenv
 from heartbeat import heartbeat_task
-from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    MenuButtonWebApp,
-    Update,
-    WebAppInfo,
-)
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update, WebAppInfo
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 load_dotenv()
-logging.basicConfig(
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("rezka.bot")
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 MINI_APP_URL = os.getenv("MINI_APP_URL", "https://rezka.comeodore.services")
-
-# Cache-buster for Cloudflare/Telegram WebView: bump on each release so the
-# mini app URL changes and clients re-fetch a fresh index.html.
-APP_VERSION = os.getenv("APP_VERSION", "2")
+# Bump on releases: a new URL makes the Telegram WebView drop its cached index.html.
+APP_VERSION = os.getenv("APP_VERSION", "3")
+ALLOWED_IDS = {int(part) for part in os.getenv("ALLOWED_TELEGRAM_IDS", "").replace(";", ",").split(",")
+               if part.strip().lstrip("-").isdigit()}
 
 
 def app_url() -> str:
-    separator = "&" if "?" in MINI_APP_URL else "?"
-    return f"{MINI_APP_URL}{separator}v={APP_VERSION}"
+    return f"{MINI_APP_URL}{'&' if '?' in MINI_APP_URL else '?'}v={APP_VERSION}"
+
+
+def app_button(text: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(text, web_app=WebAppInfo(url=app_url()))]])
 
 
 async def start(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🎬 Открыть Rezka", web_app=WebAppInfo(url=app_url()))]]
-    )
+    user = update.effective_user
+    if ALLOWED_IDS and (user is None or user.id not in ALLOWED_IDS):
+        await update.message.reply_text("Это личный бот — доступ закрыт.")
+        logger.info("Rejected /start from %s", user.id if user else "?")
+        return
     await update.message.reply_text(
-        "Поиск и загрузка фильмов и сериалов — в приложении:",
-        reply_markup=keyboard,
+        "Ищите фильмы и сериалы на HDRezka и качайте их прямо на домашний сервер.\n"
+        "Когда загрузка закончится, я пришлю сообщение.",
+        reply_markup=app_button("🎬 Открыть Rezka"),
     )
 
 
 async def on_error(_update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    error = context.error
-    if isinstance(error, (NetworkError, TimedOut)):
-        logger.warning("Transient network error: %s", error)
+    if isinstance(context.error, (NetworkError, TimedOut)):
+        logger.warning("Transient network error: %s", context.error)
         return
-    logger.error("Unhandled error: %s", error)
+    logger.error("Unhandled error: %s", context.error, exc_info=context.error)
 
 
 async def post_init(app: Application) -> None:
-    await app.bot.set_chat_menu_button(
-        menu_button=MenuButtonWebApp(text="Rezka", web_app=WebAppInfo(url=app_url()))
-    )
+    await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Rezka", web_app=WebAppInfo(url=app_url())))
+    await app.bot.set_my_commands([BotCommand("start", "Открыть приложение")])
     logger.info("Menu button set to %s", app_url())
     if os.environ.get("HEARTBEAT_URL"):
-        asyncio.create_task(heartbeat_task(service_id="rezka-bot"))
+        app.bot_data["heartbeat"] = asyncio.create_task(heartbeat_task(service_id="rezka-bot"))
 
 
 def main() -> None:

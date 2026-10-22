@@ -4,9 +4,11 @@ node_modules
 dist
 __pycache__
 *.pyc
+.pytest_cache
 downloads
 data
 .env
+.env.*
 *.log
 .idea
 .DS_Store

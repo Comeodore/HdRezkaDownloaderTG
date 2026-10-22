@@ -11,8 +11,11 @@ TEST_TOKEN = "test-token:AA"
 os.environ["TELEGRAM_BOT_TOKEN"] = TEST_TOKEN
 os.environ["ALLOWED_TELEGRAM_IDS"] = "123"
 os.environ["MEDIA_DIR"] = tempfile.mkdtemp(prefix="rezka-media-")
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="rezka-data-")
 os.environ["FRONTEND_DIR"] = "/nonexistent"
+os.environ["NOTIFY_ON_FINISH"] = "false"
 os.environ.pop("HEARTBEAT_URL", None)
+os.environ.pop("DEV_FAKE_USER_ID", None)
 
 
 def forge_init_data(user_id: int = 123, token: str = TEST_TOKEN, auth_date: int | None = None) -> str:

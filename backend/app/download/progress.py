@@ -1,6 +1,6 @@
 import asyncio
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 
 
@@ -14,41 +14,79 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+ACTIVE_STATUSES = {JobStatus.QUEUED, JobStatus.RUNNING}
 TERMINAL_STATUSES = {JobStatus.SUCCESS, JobStatus.PARTIAL, JobStatus.ERROR, JobStatus.CANCELLED}
-RESTING_STATUSES = TERMINAL_STATUSES | {JobStatus.PAUSED}
 
 
 @dataclass
 class Job:
     id: str
     url: str
-    translator_id: int
-    translator_name: str
     name: str
     kind: str
     is_series: bool
-    year: str | None = None
+    translator_key: str
+    translator_name: str
+    year: int | None = None
     poster: str | None = None
-    quality: str | None = None
+    max_height: int = 1080
     seasons: list[int] = field(default_factory=list)
+    owner_id: int = 0
     status: JobStatus = JobStatus.QUEUED
-    percent: float = 0.0
+    quality: str | None = None
+    # current file
+    current: str = ""
     downloaded: int = 0
     total: int = 0
-    speed: float = 0.0
-    current: str = ""
+    speed: float = 0.0  # bytes/s
+    # series aggregate
     done_episodes: int = 0
     total_episodes: int = 0
+    failed: list[str] = field(default_factory=list)
+    bytes_done: int = 0  # finished files of this job
     error: str | None = None
+    target: str | None = None  # library entry name (file or folder)
     created_at: float = field(default_factory=time.time)
+    finished_at: float | None = None
+    version: int = 0
 
-    def snapshot(self) -> dict:
+    @property
+    def percent(self) -> float:
+        current = self.downloaded / self.total if self.total else 0.0
+        if self.is_series:
+            if not self.total_episodes:
+                return 0.0
+            return min(100.0, (self.done_episodes + current) / self.total_episodes * 100)
+        if self.status == JobStatus.SUCCESS:
+            return 100.0
+        return min(100.0, current * 100)
+
+    @property
+    def eta(self) -> int | None:
+        if self.status != JobStatus.RUNNING or self.speed <= 0 or not self.total:
+            return None
+        remaining = max(0, self.total - self.downloaded)
+        if self.is_series and self.total_episodes:
+            left = self.total_episodes - self.done_episodes - 1
+            remaining += max(0, left) * self.total  # assume similar episode sizes
+        return int(remaining / self.speed)
+
+    def to_dict(self) -> dict:
         data = asdict(self)
         data["status"] = self.status.value
         return data
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "Job":
+        known = {f.name for f in fields(cls)}
+        values = {key: value for key, value in data.items() if key in known}
+        values["status"] = JobStatus(values.get("status", "queued"))
+        return cls(**values)
+
 
 class ProgressHub:
+    """Fan-out of job events to SSE subscribers; slow consumers drop events, never block."""
+
     def __init__(self) -> None:
         self._subscribers: set[asyncio.Queue] = set()
 
@@ -68,43 +106,22 @@ class ProgressHub:
                 pass
 
 
-class JobReporter:
-    def __init__(self, job: Job, hub: ProgressHub, interval: float) -> None:
-        self._job = job
-        self._hub = hub
-        self._interval = interval
-        self._last_emit = 0.0
-        self._last_key: tuple | None = None
+class SpeedMeter:
+    """Exponential moving average of throughput, robust to bursty chunk arrival."""
 
-    def _emit(self, force: bool = False) -> None:
-        now = time.time()
-        if not force and (now - self._last_emit) < self._interval:
-            return
-        self._last_emit = now
-        self._hub.publish({"type": "job", "job": self._job.snapshot()})
+    def __init__(self, smoothing: float = 0.3) -> None:
+        self._smoothing = smoothing
+        self._last_time = time.monotonic()
+        self._pending = 0
+        self.value = 0.0
 
-    def progress(self, downloaded: int, total: int, speed: float, current: str = "") -> None:
-        self._job.downloaded = downloaded
-        self._job.total = total
-        self._job.speed = speed
-        self._job.percent = round(min(100.0, downloaded / total * 100), 1) if total else 0.0
-        if current:
-            self._job.current = current
-        self._emit()
-
-    def episodes(self, done: int, total: int) -> None:
-        self._job.done_episodes = done
-        self._job.total_episodes = total
-        self._emit(force=True)
-
-    def quality(self, quality: str | None) -> None:
-        self._job.quality = quality
-        self._emit(force=True)
-
-    def status(self, status: JobStatus, error: str | None = None) -> None:
-        self._job.status = status
-        if error:
-            self._job.error = error
-        if status in RESTING_STATUSES:
-            self._job.speed = 0.0
-        self._emit(force=True)
+    def add(self, size: int) -> float:
+        self._pending += size
+        now = time.monotonic()
+        elapsed = now - self._last_time
+        if elapsed >= 1.0:
+            sample = self._pending / elapsed
+            self.value = sample if self.value == 0 else self.value + self._smoothing * (sample - self.value)
+            self._pending = 0
+            self._last_time = now
+        return self.value

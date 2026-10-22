@@ -4,7 +4,12 @@
 **/dist
 **/__pycache__
 **/*.pyc
+**/.pytest_cache
+backend/tests
 .git
+.claude
+**/.DS_Store
 data
 *.log
 .env
+.env.*

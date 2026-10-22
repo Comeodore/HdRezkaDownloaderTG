@@ -1,0 +1,38 @@
+<!doctype html><html><head><title>Вход на HDrezka</title></head><body><form action="/ajax/login/" id="loginForm" novalidate="">
+<div class="field" data-field="email">
+<input autocomplete="email" class="input" id="login_name" name="login_name" placeholder="Ваш Email" required="" type="email"/>
+<p class="field-error" role="alert"></p>
+</div>
+<div class="field field--password" data-field="password">
+<input autocomplete="current-password" class="input" id="login_password" minlength="8" name="login_password" placeholder="Пароль" required="" type="password"/>
+<button aria-label="Показать пароль" aria-pressed="false" class="eye-toggle" type="button">
+<svg aria-hidden="true" class="icon-eye" fill="none" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+<path d="M2 12C3.6 7.6 7.4 5 12 5s8.4 2.6 10 7c-1.6 4.4-5.4 7-10 7s-8.4-2.6-10-7Z" stroke="currentColor" stroke-linejoin="round" stroke-width="1.6"></path>
+<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"></circle>
+</svg>
+<svg aria-hidden="true" class="icon-eye-off" fill="none" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+<path d="M2 12C3.6 7.6 7.4 5 12 5s8.4 2.6 10 7c-1.6 4.4-5.4 7-10 7s-8.4-2.6-10-7Z" stroke="currentColor" stroke-linejoin="round" stroke-width="1.6"></path>
+<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"></circle>
+<path d="M3.5 20.5 20.5 3.5" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"></path>
+</svg>
+</button>
+<p class="field-error" role="alert"></p>
+</div>
+<input id="login_not_save" name="login_not_save" type="hidden" value=""/>
+<button class="btn btn-primary" id="loginSubmit" type="submit">
+<span class="btn-label">Войти</span>
+<span aria-hidden="true" class="btn-spinner">
+<svg fill="none" height="20" viewbox="0 0 20 20" width="20" xmlns="http://www.w3.org/2000/svg">
+<circle cx="10" cy="10" r="8" stroke="rgba(255,255,255,0.35)" stroke-width="2.4"></circle>
+<path d="M18 10a8 8 0 0 0-8-8" stroke="#fff" stroke-linecap="round" stroke-width="2.4"></path>
+</svg>
+</span>
+<span aria-hidden="true" class="btn-success">
+<svg fill="none" height="20" viewbox="0 0 20 20" width="20" xmlns="http://www.w3.org/2000/svg">
+<path d="M4 10.5l4 4 8-9" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.4"></path>
+</svg>
+              Вход выполнен
+            </span>
+</button>
+<p class="form-footer"><a class="link" href="/registration/">Создать аккаунт</a> или <a class="link" href="/lost/">восстановить пароль</a></p>
+</form></body></html>
